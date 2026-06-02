@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sales Copilot — Live Calls</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap">
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=block">
+<link rel="stylesheet" href="/styles.css" />
+<script src="/theme.js"></script>
+<script src="/tooltip.js" defer></script>
+<style>
+  body { padding-bottom: 32px; }
+  .wrap { max-width: 1400px; margin: 24px auto 0; padding: 0 24px;
+          display: flex; flex-direction: column; gap: 20px; }
+  .live-grid {
+    border: 1px solid var(--m-outline);
+    border-radius: var(--r-sm);
+    overflow: hidden;
+  }
+  table.live {
+    width: 100%; border-collapse: collapse;
+    font-size: 13px;
+    background: var(--m-surface-1);
+  }
+  table.live th, table.live td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--m-outline);
+    text-align: left;
+  }
+  table.live th {
+    background: var(--m-surface-2);
+    color: var(--m-on-surface-dim);
+    font-weight: 600; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  table.live tr:last-child td { border-bottom: 0; }
+  table.live td.id, table.live td.num {
+    font-family: "Roboto Mono", ui-monospace, monospace;
+    color: var(--m-on-surface-2);
+  }
+  table.live td.id { font-size: 11.5px; }
+  /* Right-align numeric column headers AND values so they read as a single
+     column; without the th rule the header sits flush left while the value
+     hugs the right edge, breaking visual alignment. The width: 1% +
+     white-space: nowrap is the shrink-to-fit idiom — the Tools, Skips,
+     Duration, Audio columns hold tiny content and shouldn't get free
+     horizontal slack from the table; the slack goes to Call ID + the
+     transcript / coaching cells instead. */
+  table.live td.num, table.live th.num { text-align: right; }
+  table.live th.num { width: 1%; white-space: nowrap; }
+  table.live th:last-child,
+  table.live td:last-child { width: 1%; white-space: nowrap; }
+  /* Live-transcript cell ─ shows the most recent utterance per call.
+     Side-coded label (Customer in blue, Rep in red), then the text.
+     When fresh (<4s since the event arrived), the text gets a soft
+     highlight + a pulsing dot. After 4s it fades to a quieter style. */
+  .utt-cell {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12.5px; line-height: 1.4;
+    color: var(--m-on-surface-2);
+    max-width: 100%;
+  }
+  .utt-cell .utt-dot {
+    flex: 0 0 auto;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--m-on-surface-dim);
+    margin-top: 5px;
+  }
+  .utt-cell .utt-body {
+    min-width: 0; flex: 1;
+    overflow: hidden;
+  }
+  .utt-cell .utt-label {
+    font-weight: 600; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-right: 6px;
+  }
+  .utt-label-customer { color: var(--m-info); }
+  .utt-label-rep      { color: var(--m-primary); }
+  .utt-text {
+    color: var(--m-on-surface);
+    /* clamp to two lines; longer utterances tooltip on hover */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .utt-cell.active .utt-text { color: var(--m-on-surface); }
+  .utt-cell.dim .utt-text   { color: var(--m-on-surface-dim); }
+  .utt-cell.active.customer .utt-dot {
+    background: var(--m-info);
+    box-shadow: 0 0 0 4px rgba(106,169,255,0.18);
+    animation: utt-pulse 0.9s ease-in-out infinite;
+  }
+  .utt-cell.active.rep .utt-dot {
+    background: var(--m-primary);
+    box-shadow: 0 0 0 4px rgba(230,69,69,0.16);
+    animation: utt-pulse 0.9s ease-in-out infinite;
+  }
+  @keyframes utt-pulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.4); }
+  }
+  .utt-empty {
+    color: var(--m-on-surface-dim); font-style: italic; font-size: 12px;
+  }
+
+  /* Coaching cell — most recent insight or tool-result prose. */
+  .coach-cell {
+    display: flex; align-items: flex-start; gap: 8px;
+    font-size: 12.5px; line-height: 1.4;
+    color: var(--m-on-surface-2);
+    max-width: 100%;
+  }
+  .coach-cell .coach-icon {
+    flex: 0 0 auto; margin-top: 1px;
+    font-size: 14px; color: var(--m-on-surface-dim);
+  }
+  .coach-cell .coach-body { min-width: 0; flex: 1; overflow: hidden; }
+  .coach-cell .coach-label {
+    display: inline-block;
+    font-weight: 700; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-right: 6px;
+    color: var(--m-primary);
+  }
+  .coach-cell .coach-text {
+    color: var(--m-on-surface);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .coach-cell.dim .coach-text { color: var(--m-on-surface-dim); }
+  .coach-cell.active .coach-icon {
+    color: var(--m-primary);
+    text-shadow: 0 0 8px rgba(230,69,69,0.5);
+    animation: coach-flash 0.9s ease-in-out;
+  }
+  @keyframes coach-flash {
+    0%   { transform: scale(0.9); }
+    40%  { transform: scale(1.25); }
+    100% { transform: scale(1); }
+  }
+  .live-pulse {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--m-success); margin-right: 6px;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.45; transform: scale(0.85); }
+    50%      { opacity: 1; transform: scale(1.1); }
+  }
+  .listen-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: var(--r-pill);
+    background: var(--m-surface-3); color: var(--m-on-surface);
+    border: 1px solid var(--m-outline);
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    transition: all .15s var(--ease-out);
+  }
+  .listen-btn:hover { background: var(--m-surface-4); }
+  .listen-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .listen-btn.active {
+    background: rgba(74,222,128,0.16);
+    border-color: rgba(74,222,128,0.40);
+    color: var(--m-success);
+  }
+  .listen-btn .material-symbols-rounded { font-size: 16px; }
+  .empty-row { text-align: center; padding: 36px 20px;
+               color: var(--m-on-surface-dim); }
+  .empty-row .material-symbols-rounded {
+    font-size: 36px; display: block; opacity: 0.5; margin-bottom: 8px;
+  }
+  .global-tap {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    background: var(--m-surface-2);
+    border: 1px solid var(--m-outline);
+    border-radius: var(--r-sm);
+    font-size: 12.5px;
+  }
+  .global-tap.active { border-color: rgba(74,222,128,0.30); background: rgba(74,222,128,0.08); }
+  .global-tap-target {
+    font-family: "Roboto Mono", ui-monospace, monospace;
+    font-size: 11.5px; color: var(--m-on-surface-2);
+  }
+  .global-tap-vol {
+    flex: 1; height: 6px;
+    background: var(--m-surface);
+    border-radius: var(--r-pill);
+    overflow: hidden;
+  }
+  .global-tap-vol-fill {
+    height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--m-success), var(--m-warn), var(--m-primary));
+    transition: width .12s linear;
+  }
+</style>
+</head>
+<body>
+
+<header class="appbar">
+  <div class="appbar-left">
+    <span class="logo-dot"></span>
+    <span class="app-title">Sales Copilot · Live Calls</span>
+  </div>
+  <div class="appbar-center">
+    <span class="head-hint" id="last-refreshed">—</span>
+  </div>
+  <div class="appbar-right">
+    <label class="switch" title="Re-poll /active-calls every 3 seconds as a safety net for the WebSocket push path">
+      <input type="checkbox" id="auto-refresh" checked />
+      <span>Auto-refresh</span>
+    </label>
+    <button class="btn-text" id="btn-refresh"
+            title="Refresh the active-calls list now">
+      <span class="material-symbols-rounded">refresh</span>
+      <span>Refresh</span>
+    </button>
+    <a class="nav-link" href="/sidecar/cdr"
+       title="Historical call records, insights, and tool timelines">
+      <span class="material-symbols-rounded">history</span>
+      CDR
+    </a>
+    <a class="nav-link" href="/sidecar/about-monitor"
+       title="About this monitor — architecture, data flow, design notes">
+      <span class="material-symbols-rounded">menu_book</span>
+      About
+    </a>
+    <a class="nav-link" href="/"
+       title="Agent's main dialing interface">
+      <span class="material-symbols-rounded">support_agent</span>
+      Agent
+    </a>
+    <button class="theme-toggle" title="Toggle light / dark">
+      <span class="material-symbols-rounded icon-when-dark">light_mode</span>
+      <span class="material-symbols-rounded icon-when-light">dark_mode</span>
+    </button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- Global tap status -->
+  <div class="global-tap" id="global-tap">
+    <span class="material-symbols-rounded" style="color: var(--m-on-surface-dim);">headphones</span>
+    <span class="global-tap-target" id="global-tap-target">No call attached</span>
+    <div class="global-tap-vol"><div class="global-tap-vol-fill" id="global-tap-vol"></div></div>
+  </div>
+
+  <!-- Live calls table -->
+  <section class="surface">
+    <header class="surface-head">
+      <div class="surface-title">
+        <span class="material-symbols-rounded">graphic_eq</span>
+        <h2>Active calls</h2>
+        <span class="info-bubble" tabindex="0"
+              title="Every call currently bridged through this sidecar. Cells pulse when fresh (under 4 s) and dim once they stop firing. Click Listen on a row to stream that call's audio into this browser.">
+          <span class="material-symbols-rounded">info</span>
+        </span>
+      </div>
+      <span class="head-hint" id="calls-count"></span>
+    </header>
+    <div style="padding: 16px 20px 18px;">
+      <div class="live-grid">
+        <table class="live">
+          <thead><tr>
+            <th>Started</th>
+            <th>Call ID</th>
+            <th class="num">Duration</th>
+            <th style="width: 22%;">Customer said</th>
+            <th style="width: 22%;">Agent said</th>
+            <th style="width: 26%;">Coaching</th>
+            <th class="num">Tools</th>
+            <th class="num">Skips</th>
+            <th>Audio</th>
+          </tr></thead>
+          <tbody id="live-tbody">
+            <tr><td colspan="9" class="empty-row">
+              <span class="material-symbols-rounded">hourglass_empty</span>
+              No live calls.
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+const API = "/sidecar";
+const $ = (id) => document.getElementById(id);
+
+// All displayed times pin to Eastern (America/New_York handles EST/EDT
+// switching automatically). The demo runs out of a Pittsburgh number and
+// the team works in ET; showing wall-clock in whatever the viewer's
+// browser thinks the timezone is made it confusing to compare to relay /
+// SignalWire dashboard timestamps.
+const _DISPLAY_TZ = "America/New_York";
+function fmtTime(epoch) {
+  if (!epoch) return "—";
+  const d = new Date(epoch * 1000);
+  return d.toLocaleTimeString("en-US", {
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    timeZone: _DISPLAY_TZ,
+  });
+}
+function fmtElapsed(startedAt) {
+  if (!startedAt) return "—";
+  const s = Math.floor(Date.now() / 1000 - startedAt);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return `${m}m${String(r).padStart(2, "0")}s`;
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+
+// ===== Audio tap client =====
+//
+// Mints a ws_ticket lazily via POST /sidecar/token (basic-auth gated) so
+// we can open /ws/audio/listen?session=…&ticket=…. Decodes μ-law,
+// resamples 8 kHz → AudioContext rate, plays via AudioWorklet.
+
+const _MULAW = (() => {
+  const t = new Float32Array(256);
+  for (let b = 0; b < 256; b++) {
+    let v = ~b & 0xff;
+    const sign = v & 0x80 ? -1 : 1;
+    const exponent = (v >> 4) & 0x07;
+    const mantissa = v & 0x0f;
+    const sample = sign * (((mantissa << 3) + 0x84) << exponent) - sign * 0x84;
+    t[b] = sample / 32768;
+  }
+  return t;
+})();
+function mulawDecode(bytes) {
+  const out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) out[i] = _MULAW[bytes[i]];
+  return out;
+}
+function resampleTo(rate, src) {
+  const ratio = rate / 8000;
+  const outLen = Math.floor(src.length * ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const pos = i / ratio;
+    const i0 = Math.floor(pos), i1 = Math.min(i0 + 1, src.length - 1);
+    out[i] = src[i0] * (1 - (pos - i0)) + src[i1] * (pos - i0);
+  }
+  return out;
+}
+
+const tap = {
+  ctx: null,
+  node: null,
+  workletReady: null,
+  ws: null,
+  ticket: null,
+  activeSession: null,
+  volPeak: 0,
+};
+
+async function _ensureWorklet() {
+  if (!tap.ctx) tap.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (tap.ctx.state === "suspended") await tap.ctx.resume();
+  if (!tap.workletReady) {
+    tap.workletReady = tap.ctx.audioWorklet.addModule(`/audio_worklet.js?v=${Date.now()}`);
+  }
+  await tap.workletReady;
+  if (!tap.node) {
+    tap.node = new AudioWorkletNode(tap.ctx, "pcm-ring", {
+      numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1],
+    });
+    tap.node.connect(tap.ctx.destination);
+  } else {
+    tap.node.port.postMessage({ cmd: "reset" });
+  }
+}
+
+async function _fetchTicket() {
+  if (tap.ticket) return tap.ticket;
+  const r = await fetch(`${API}/token`, { method: "POST", credentials: "include" });
+  if (!r.ok) throw new Error(`token http ${r.status}`);
+  const d = await r.json();
+  tap.ticket = d.ws_ticket;
+  // Server tells us which role is the customer — keep the side detection
+  // in sync with whatever the backend has configured.
+  if (d.customer_role) _customerRole = d.customer_role;
+  return tap.ticket;
+}
+
+async function startListen(session, callId) {
+  if (tap.ws) stopListen();
+  await _ensureWorklet();
+  const ticket = await _fetchTicket();
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}${API}/ws/audio/listen`
+    + `?session=${encodeURIComponent(session)}&ticket=${encodeURIComponent(ticket)}`;
+  const ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = (ev) => {
+    if (!(ev.data instanceof ArrayBuffer)) return;
+    const pcm = mulawDecode(new Uint8Array(ev.data));
+    const upsampled = resampleTo(tap.ctx.sampleRate, pcm);
+    tap.node.port.postMessage(upsampled, [upsampled.buffer]);
+    // crude peak meter — RMS would be nicer but this is fine for a UX cue
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i++) {
+      const v = Math.abs(pcm[i]);
+      if (v > peak) peak = v;
+    }
+    tap.volPeak = tap.volPeak * 0.75 + peak * 0.25;
+    $("global-tap-vol").style.width = `${Math.min(100, tap.volPeak * 220)}%`;
+  };
+  ws.onclose = () => {
+    if (tap.ws === ws) {
+      tap.ws = null;
+      tap.activeSession = null;
+      renderGlobalTap();
+      renderTable();
+    }
+  };
+  ws.onerror = (e) => console.warn("audio ws error:", e);
+  tap.ws = ws;
+  tap.activeSession = session;
+  tap.activeCallId = callId;
+  renderGlobalTap();
+  renderTable();
+}
+
+function stopListen() {
+  try { tap.ws?.close(); } catch {}
+  tap.ws = null;
+  tap.activeSession = null;
+  tap.activeCallId = null;
+  tap.node?.port?.postMessage({ cmd: "reset" });
+  $("global-tap-vol").style.width = "0%";
+  renderGlobalTap();
+  renderTable();
+}
+
+function renderGlobalTap() {
+  const el = $("global-tap");
+  if (tap.activeSession) {
+    el.classList.add("active");
+    $("global-tap-target").textContent = `listening to ${tap.activeCallId || tap.activeSession}`;
+  } else {
+    el.classList.remove("active");
+    $("global-tap-target").textContent = "No call attached";
+  }
+}
+
+// ===== Table =====
+let _calls = [];
+
+async function refresh() {
+  try {
+    const r = await fetch(`${API}/active-calls`, { credentials: "include" });
+    if (!r.ok) throw new Error(`http ${r.status}`);
+    const d = await r.json();
+    _calls = d.calls || [];
+    $("calls-count").textContent =
+      _calls.length === 0 ? "no live calls" : `${_calls.length} live`;
+    renderTable();
+    $("last-refreshed").textContent = `Updated ${fmtTime(Math.floor(Date.now() / 1000))}`;
+  } catch (e) {
+    console.warn("refresh failed:", e);
+    $("last-refreshed").textContent = "Fetch error — retrying";
+  }
+}
+
+function renderCoachingCell(c) {
+  const text = (c.last_coaching_text || "").trim();
+  const ago  = c.seconds_since_coaching;
+  if (!text) {
+    return `<span class="utt-empty">— no coaching yet</span>`;
+  }
+  const fresh = ago !== null && ago < 4;
+  const cls = `coach-cell ${fresh ? "active" : "dim"}`;
+  const src = c.last_coaching_source === "tool" ? "Rebuttal" : "Insight";
+  return `<span class="${cls}">
+    <span class="material-symbols-rounded coach-icon">auto_awesome</span>
+    <span class="coach-body">
+      <span class="coach-label">${src}</span>
+      <span class="coach-text" title="${esc(text)}">${esc(text)}</span>
+    </span>
+  </span>`;
+}
+
+function renderSideCell(c, side) {
+  // `side` is "customer" or "rep". Pulls the per-side last_*_text and
+  // seconds_since_* fields surfaced by /active-calls. Cell goes "active"
+  // (pulsing dot, bright text) when an utterance arrived in the last 4 s,
+  // then fades to "dim". Each side fades independently — so the rep cell
+  // can stay highlighted while the customer cell dims, and vice versa.
+  const textKey = side === "customer" ? "last_customer_text" : "last_rep_text";
+  const ageKey  = side === "customer" ? "seconds_since_customer" : "seconds_since_rep";
+  const text = (c[textKey] || "").trim();
+  const ago  = c[ageKey];
+  if (!text) {
+    return `<span class="utt-empty">—</span>`;
+  }
+  const fresh = ago !== null && ago !== undefined && ago < 4;
+  const cls = `utt-cell ${fresh ? "active" : "dim"} ${side}`;
+  return `<span class="${cls}">
+    <span class="utt-dot"></span>
+    <span class="utt-body">
+      <span class="utt-text" title="${esc(text)}">${esc(text)}</span>
+    </span>
+  </span>`;
+}
+
+function renderTable() {
+  const tb = $("live-tbody");
+  if (!_calls.length) {
+    tb.innerHTML = `<tr><td colspan="9" class="empty-row">
+      <span class="material-symbols-rounded">hourglass_empty</span>
+      No live calls.
+    </td></tr>`;
+    return;
+  }
+  tb.innerHTML = "";
+  for (const c of _calls) {
+    const tr = document.createElement("tr");
+    const sess = c.audio_session;
+    const isListening = sess && tap.activeSession === sess;
+    const btnLabel = isListening ? "Stop" : "Listen";
+    const btnIcon  = isListening ? "stop_circle" : "headphones";
+    const disabled = sess ? "" : "disabled";
+    const cls = isListening ? "listen-btn active" : "listen-btn";
+    const btnTitle = !sess
+      ? "Audio tap not attached to this call yet — wait a few seconds after the call connects"
+      : isListening
+        ? "Stop streaming this call's audio into the browser"
+        : "Stream the call's μ-law audio into this browser via the SignalWire tap WebSocket";
+    tr.innerHTML = `
+      <td><span class="live-pulse"></span>${fmtTime(c.started_at)}</td>
+      <td class="id" title="${esc(c.call_id)}">${esc(c.call_id)}</td>
+      <td class="num">${fmtElapsed(c.started_at)}</td>
+      <td>${renderSideCell(c, "customer")}</td>
+      <td>${renderSideCell(c, "rep")}</td>
+      <td>${renderCoachingCell(c)}</td>
+      <td class="num">${c.tool_count ?? 0}</td>
+      <td class="num">${c.skips_count ?? 0}</td>
+      <td>
+        <button class="${cls}" ${disabled}
+                data-session="${esc(sess || '')}"
+                data-call-id="${esc(c.call_id)}"
+                title="${esc(btnTitle)}">
+          <span class="material-symbols-rounded">${btnIcon}</span>
+          <span>${btnLabel}</span>
+        </button>
+      </td>
+    `;
+    tb.appendChild(tr);
+  }
+  // Wire buttons
+  for (const btn of tb.querySelectorAll(".listen-btn")) {
+    btn.addEventListener("click", (e) => {
+      const sess = btn.getAttribute("data-session");
+      const cid = btn.getAttribute("data-call-id");
+      if (!sess) return;
+      if (tap.activeSession === sess) stopListen();
+      else startListen(sess, cid);
+    });
+  }
+}
+
+$("btn-refresh").addEventListener("click", refresh);
+let timer = 0;
+function arm() {
+  clearInterval(timer);
+  if ($("auto-refresh").checked) timer = setInterval(refresh, 3000);
+}
+$("auto-refresh").addEventListener("change", arm);
+
+refresh(); arm();
+
+// ===== Real-time push via /ws/events =====
+//
+// The sidecar's existing event WebSocket broadcasts every transcribe,
+// insight, tool_call, etc. to all subscribers. Subscribing here lets the
+// monitor's speaker indicator update sub-second instead of waiting on
+// the 3 s /active-calls poll. The poll stays as a safety net for state
+// we can't reconstruct from the event stream alone (audio_session,
+// initial population, missed events during reconnect).
+
+// SignalWire labels the call legs "remote-caller" / "local-caller".
+// In this app's call shape (rep dials in, customer is connected to)
+// the customer is the "local-caller" leg. The actual configured value
+// is learned via /token (see _fetchTicket); this is the fallback if
+// the ticket hasn't been fetched yet.
+let _customerRole = "local-caller";
+let _eventsWs = null;
+let _eventsBackoff = 1000;
+// Keyed by `${callId}|${side}` so the rep and customer cells fade independently.
+const _decayTimers = new Map();
+const _coachDecayTimers = new Map();
+
+function _armSideDecay(cid, side) {
+  const key = `${cid}|${side}`;
+  if (_decayTimers.has(key)) clearTimeout(_decayTimers.get(key));
+  _decayTimers.set(key, setTimeout(() => {
+    const c = _calls.find((x) => x.call_id === cid);
+    if (c) {
+      if (side === "customer") c.seconds_since_customer = 4.5;
+      else                     c.seconds_since_rep = 4.5;
+      renderTable();
+    }
+    _decayTimers.delete(key);
+  }, 4200));
+}
+
+function _armCoachDecay(cid) {
+  if (_coachDecayTimers.has(cid)) clearTimeout(_coachDecayTimers.get(cid));
+  _coachDecayTimers.set(cid, setTimeout(() => {
+    const c = _calls.find((x) => x.call_id === cid);
+    if (c) { c.seconds_since_coaching = 4.5; renderTable(); }
+    _coachDecayTimers.delete(cid);
+  }, 4200));
+}
+
+function _callIdOf(payload) {
+  // The fanout frame is `{call_info, event}`. Both can carry call_id.
+  return (payload.call_info && payload.call_info.call_id)
+      || (payload.event && payload.event.channel_data && payload.event.channel_data.call_id)
+      || null;
+}
+
+function _patchCall(callId, patch) {
+  // Apply a patch to the in-memory _calls row for callId, then re-render
+  // just the affected row. Creates a placeholder if we haven't seen this
+  // call yet — the next /active-calls poll will fill in started_at etc.
+  let c = _calls.find((x) => x.call_id === callId);
+  if (!c) {
+    c = { call_id: callId, started_at: Math.floor(Date.now() / 1000),
+          insights_count: 0, tool_count: 0, skips_count: 0 };
+    _calls.unshift(c);
+  }
+  Object.assign(c, patch);
+  renderTable();
+}
+
+function _onEvent(payload) {
+  const event = payload.event || {};
+  const t = event.type || "";
+  const cid = _callIdOf(payload);
+  if (!cid) return;
+
+  if (t === "transcribe.utterance" || t === "utterance") {
+    const utt = event.utterance || {};
+    const role = (utt.role || "").toLowerCase();
+    if (!role) return;
+    const side = role === _customerRole.toLowerCase() ? "customer" : "rep";
+    // content may be empty for the early-warning broadcast we send before
+    // the text is known. Don't overwrite a previously-captured utterance
+    // with a blank one — that'd flash the cell back to empty mid-call.
+    const incoming = (utt.content || "").trim();
+    const patch = { last_speaker: side, seconds_since_utterance: 0 };
+    if (side === "customer") {
+      patch.seconds_since_customer = 0;
+      if (incoming) patch.last_customer_text = incoming;
+    } else {
+      patch.seconds_since_rep = 0;
+      if (incoming) patch.last_rep_text = incoming;
+    }
+    if (incoming) patch.last_text = incoming;
+    _patchCall(cid, patch);
+    _armSideDecay(cid, side);
+  } else if (t === "insight") {
+    const c = _calls.find((x) => x.call_id === cid);
+    _patchCall(cid, {
+      insights_count: ((c && c.insights_count) || 0) + 1,
+      last_coaching_text: event.raw || (c && c.last_coaching_text) || "",
+      last_coaching_source: "insight",
+      seconds_since_coaching: 0,
+    });
+    _armCoachDecay(cid);
+  } else if (t === "monitor.coaching") {
+    // Synthetic event we emit from the backend whenever an insight or
+    // tool_result with prose lands. Carries `text` + `source`.
+    _patchCall(cid, {
+      last_coaching_text: event.text || "",
+      last_coaching_source: event.source || "tool",
+      seconds_since_coaching: 0,
+    });
+    _armCoachDecay(cid);
+  } else if (t === "tool_call") {
+    const c = _calls.find((x) => x.call_id === cid);
+    _patchCall(cid, { tool_count: ((c && c.tool_count) || 0) + 1 });
+  } else if (t === "skip") {
+    const c = _calls.find((x) => x.call_id === cid);
+    _patchCall(cid, { skips_count: ((c && c.skips_count) || 0) + 1 });
+  } else if (t === "start" || t === "final") {
+    // New call or call ended: poll once to repopulate the table with
+    // accurate fields (audio_session needs the tap_status handshake,
+    // which won't have fired yet on the start event).
+    refresh();
+  }
+}
+
+async function openEventsWs() {
+  if (_eventsWs) return;
+  let ticket;
+  try { ticket = await _fetchTicket(); }
+  catch (e) { console.warn("events ticket fetch failed:", e); _scheduleReconnect(); return; }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${proto}//${location.host}${API}/ws/events?ticket=${encodeURIComponent(ticket)}`;
+  const ws = new WebSocket(url);
+  ws.onopen = () => { _eventsBackoff = 1000; };
+  ws.onmessage = (ev) => {
+    try { _onEvent(JSON.parse(ev.data)); }
+    catch (e) { /* ignore non-JSON frames */ }
+  };
+  ws.onclose = () => {
+    if (_eventsWs === ws) _eventsWs = null;
+    _scheduleReconnect();
+  };
+  ws.onerror = (e) => console.warn("events ws error:", e);
+  _eventsWs = ws;
+}
+
+function _scheduleReconnect() {
+  // Stale ticket after a container restart needs a fresh /token; clearing
+  // tap.ticket forces _fetchTicket to re-mint. Exponential backoff capped
+  // at 30 s to avoid tight loops if the server is down.
+  tap.ticket = null;
+  setTimeout(openEventsWs, _eventsBackoff);
+  _eventsBackoff = Math.min(_eventsBackoff * 2, 30000);
+}
+
+openEventsWs();
+</script>
+
+</body>
+</html>

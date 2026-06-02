@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>How the Live Monitor works — Sales Copilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap">
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,0,0&display=block">
+<link rel="stylesheet" href="/styles.css" />
+<script src="/theme.js"></script>
+<script src="/tooltip.js" defer></script>
+<style>
+  body { padding-bottom: 80px; }
+  .doc {
+    max-width: 760px;
+    margin: 40px auto 0;
+    padding: 0 24px;
+    color: var(--m-on-surface);
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .doc .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--m-primary); font-weight: 700;
+    margin-bottom: 18px;
+  }
+  .doc h1 {
+    font-size: 38px; font-weight: 700; line-height: 1.15;
+    margin: 0 0 16px; color: var(--m-on-surface);
+    letter-spacing: -0.02em;
+  }
+  .doc .deck {
+    font-size: 19px; line-height: 1.55;
+    color: var(--m-on-surface-2);
+    margin: 0 0 36px;
+  }
+  .doc h2 {
+    font-size: 22px; font-weight: 700;
+    margin: 48px 0 12px;
+    letter-spacing: -0.01em;
+  }
+  .doc h3 {
+    font-size: 16px; font-weight: 700;
+    margin: 32px 0 8px;
+    color: var(--m-on-surface);
+  }
+  .doc p { margin: 0 0 16px; }
+  .doc ul, .doc ol { margin: 0 0 16px; padding-left: 22px; }
+  .doc li { margin-bottom: 6px; }
+  .doc code {
+    font-family: "Roboto Mono", ui-monospace, monospace;
+    font-size: 13.5px;
+    background: var(--m-surface-2);
+    border-radius: 4px;
+    padding: 1.5px 6px;
+    color: var(--m-on-surface);
+  }
+  .doc pre {
+    margin: 18px 0 22px;
+    padding: 16px 18px;
+    background: var(--m-surface-2);
+    border: 1px solid var(--m-outline);
+    border-radius: var(--r-sm);
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--m-on-surface);
+  }
+  .doc pre code {
+    background: transparent;
+    padding: 0;
+    font-size: inherit;
+  }
+  .doc a { color: var(--m-primary); }
+  .doc .callout {
+    border-left: 3px solid var(--m-primary);
+    background: var(--m-surface-2);
+    padding: 14px 18px;
+    margin: 22px 0;
+    border-radius: 0 var(--r-sm) var(--r-sm) 0;
+    font-size: 14.5px;
+    color: var(--m-on-surface-2);
+  }
+  .doc .callout strong { color: var(--m-on-surface); }
+
+  .diagram {
+    margin: 22px 0 28px;
+    padding: 22px 18px;
+    background: var(--m-surface-2);
+    border: 1px solid var(--m-outline);
+    border-radius: var(--r-sm);
+    font-family: "Roboto Mono", ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--m-on-surface);
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .diagram .arrow { color: var(--m-primary); }
+  .diagram .label { color: var(--m-on-surface-dim); }
+
+  .doc figure {
+    margin: 28px 0 36px;
+    padding: 0;
+  }
+  .doc figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--m-outline);
+    border-radius: var(--r-sm);
+    background: var(--m-surface-2);
+  }
+  .doc figure figcaption {
+    margin-top: 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--m-on-surface-dim);
+    text-align: center;
+  }
+
+  .doc .footnote {
+    margin-top: 56px;
+    padding-top: 20px;
+    border-top: 1px solid var(--m-outline);
+    color: var(--m-on-surface-dim);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header class="appbar">
+  <div class="appbar-left">
+    <span class="logo-dot"></span>
+    <span class="app-title">Sales Copilot · Documentation</span>
+  </div>
+  <div class="appbar-right">
+    <a class="nav-link" href="/sidecar/monitor"
+       title="Live call monitor — every active call with transcript, coaching, and listen-in audio">
+      <span class="material-symbols-rounded">graphic_eq</span>
+      Live calls
+    </a>
+    <a class="nav-link" href="/sidecar/cdr"
+       title="Call history — durations, insights, tools, and full replay timelines">
+      <span class="material-symbols-rounded">history</span>
+      CDR
+    </a>
+    <a class="nav-link" href="/"
+       title="Agent's main dialing interface">
+      <span class="material-symbols-rounded">support_agent</span>
+      Agent
+    </a>
+    <button class="theme-toggle" title="Toggle light / dark">
+      <span class="material-symbols-rounded icon-when-dark">light_mode</span>
+      <span class="material-symbols-rounded icon-when-light">dark_mode</span>
+    </button>
+  </div>
+</header>
+
+<article class="doc">
+
+<div class="eyebrow">
+  <span class="material-symbols-rounded" style="font-size:16px;">graphic_eq</span>
+  Engineering notes
+</div>
+
+<h1>How the live monitor works</h1>
+
+<p class="deck">
+A supervisor opens one page and sees every active sales call in the system —
+who is speaking, what they just said, what coaching the AI is whispering to
+the rep, and a "listen in" button that pipes the live audio into the
+browser. This is how the data flows from a PSTN call leg all the way to a
+DOM cell that pulses every time a word comes through.
+</p>
+
+<figure>
+  <img src="/monitor-screenshot.png"
+       alt="The live monitor showing one active call with the customer's most recent utterance, the rep's last line, and an INSIGHT coaching cue from the AI." />
+  <figcaption>
+    One live call mid-conversation — customer and rep cells each carry the
+    most recent utterance from their side, the coaching cell shows an
+    INSIGHT the AI has whispered to the rep, and a per-row Listen button
+    streams that call's μ-law audio into this browser.
+  </figcaption>
+</figure>
+
+<h2>What you see</h2>
+
+<p>
+The monitor is a single table, refreshed three ways:
+</p>
+
+<ul>
+  <li><strong>A 3-second poll</strong> against <code>/sidecar/active-calls</code> rebuilds the row set from authoritative state.</li>
+  <li><strong>A push WebSocket</strong> at <code>/sidecar/ws/events</code> patches individual cells the instant a transcribe, insight, or tool-call event arrives — sub-second latency without thrashing the table.</li>
+  <li><strong>An audio WebSocket</strong> at <code>/sidecar/ws/audio/listen</code> streams μ-law PCMU frames from one specific call, which the browser decodes and plays through an AudioWorklet.</li>
+</ul>
+
+<p>
+Each row has cells for <em>customer said</em>, <em>rep said</em>, and
+<em>coaching</em>. They flash bright when fresh (under four seconds old)
+and fade to a quieter style after that, so a supervisor can glance at the
+table and see who has talked most recently without reading every word.
+</p>
+
+<h2>The data path, end to end</h2>
+
+<div class="diagram">  PSTN caller                                browser (rep)            browser (supervisor)
+       │                                          ▲                          ▲
+       ▼                                          │                          │
+  SignalWire Relay  ─── transcribe.* ────► SignalWire SDK ─┐                 │
+       │                                                   │  POST           │
+       │   /events webhook (turn, insight, tool_*)         ▼  /speaker-event │
+       ▼                                              ┌─────────────┐        │
+   <span class="label">brian_sidecar (FastAPI)</span>  ◄────────────────────  │  app.js     │        │
+       │                                              └─────────────┘        │
+       ├─► CDR (SQLite, WAL)                                                  │
+       ├─► _call_activity dict  (last_customer_text, last_rep_text, …)        │
+       │                                                                     │
+       └─► <span class="arrow">/ws/events fanout</span> ──────────────────────────────────────┘
+                                                                              │
+                                                                              ▼
+                                                                   monitor.html row patch</div>
+
+<p>
+Four boxes are doing the real work:
+</p>
+
+<ol>
+  <li>The <strong>SignalWire Relay</strong> runs the SWML script we render — answer, connect the two legs, attach an <code>ai_sidecar</code> verb, and (for any monitored call) attach a <code>tap</code> verb that mirrors audio to a WebSocket URL.</li>
+  <li>The <strong>brian_sidecar service</strong> is the FastAPI app that hosts SWML rendering, the <code>/events</code> webhook, the per-call activity table, the WebSocket fanout, and the static UI.</li>
+  <li>The <strong>rep's browser</strong> runs the SignalWire SDK and the main copilot UI. It POSTs every utterance it observes to <code>/speaker-event</code> so the backend has a copy.</li>
+  <li>The <strong>supervisor's browser</strong> opens the monitor page, subscribes to the event WebSocket, and (optionally) opens a per-call audio WebSocket.</li>
+</ol>
+
+<h2>Per-call audio without RTP</h2>
+
+<p>
+The natural way to mirror a SignalWire call somewhere else is RTP — but
+RTP doesn't traverse browsers, and standing up a TURN server for one
+listener per call is heavy. The <code>tap</code> verb has a second mode:
+hand it a WebSocket URL and it pushes μ-law PCMU frames straight to that
+socket, 8 kHz mono, 160 bytes every 20 ms.
+</p>
+
+<p>
+The fiddly part is per-call routing. SWML's variable substitution doesn't
+fire at the time the <code>tap</code> verb renders — embedding
+<code>%{call.id}</code> in the URI gets you an empty string. So the
+backend generates a fresh <code>session_id</code> nonce at SWML render
+time and bakes it into <em>both</em> the tap URI and a status-callback
+URL:
+</p>
+
+<pre><code>session_id = secrets.token_urlsafe(12)
+self._audio_sessions[session_id] = _AudioHub()
+
+tap_uri = ws_base + self.route \
+    + f"/ws/audio?session={session_id}&ticket={ticket}"
+
+tap_status_url = self._webhook_url(
+    f"/tap-status?session={session_id}")
+
+main_section.append({"tap": {
+    "uri": tap_uri,
+    "direction": "both",
+    "codec": "PCMU",
+    "status_url": tap_status_url,
+}})</code></pre>
+
+<p>
+When the relay opens the tap, it also fires <code>/tap-status</code> with
+the real <code>call.id</code>. That handshake is what tells the backend
+"session X belongs to call Y" — the rest of the codebase keys off
+<code>call_id</code>, so this is the bridge.
+</p>
+
+<h2>Playing μ-law in a browser</h2>
+
+<p>
+The supervisor clicks <em>Listen</em>, mints a short-lived ticket, opens
+<code>/sidecar/ws/audio/listen?session=…&amp;ticket=…</code>, and starts
+receiving μ-law frames. Three steps to turn those into sound:
+</p>
+
+<ol>
+  <li><strong>Decode</strong> each byte through a pre-built 256-entry table to a Float32 sample in the range [-1, 1].</li>
+  <li><strong>Resample</strong> 8 kHz → AudioContext rate (typically 48 kHz) with a linear interpolator. Linear is fine for speech; the energy above 4 kHz that a sharper filter would preserve doesn't exist in the source.</li>
+  <li><strong>Hand off</strong> to an AudioWorklet that owns a 500 ms ring buffer. Worklets run on the audio rendering thread, so they can't stall when the main thread is busy laying out the table.</li>
+</ol>
+
+<p>
+The ring buffer drops oldest samples on overflow and zero-fills on
+under-run, which gives a calm degradation when the network is flaky —
+brief silences instead of glitches.
+</p>
+
+<h2>Real-time push without polling</h2>
+
+<p>
+The 3-second poll is a safety net. For sub-second updates, the monitor
+subscribes to <code>/ws/events</code> — the same WebSocket the rep's UI
+uses. The backend fans every sidecar event (turn, transcribe, insight,
+tool_call, skip, monitor.coaching) out to every connected subscriber.
+The monitor's onmessage handler patches the in-memory row for the right
+<code>call_id</code> and re-renders just that row:
+</p>
+
+<pre><code>function _patchCall(callId, patch) {
+  let c = _calls.find((x) => x.call_id === callId);
+  if (!c) {
+    c = { call_id: callId, started_at: now(), … };
+    _calls.unshift(c);
+  }
+  Object.assign(c, patch);
+  renderTable();
+}</code></pre>
+
+<p>
+If an event arrives for a call we haven't polled yet, a placeholder row
+appears immediately and the next poll fills in the missing fields. The
+poll-and-push pair means the table is correct within 3 seconds even if
+the WebSocket drops, and within ~50 ms when it's connected.
+</p>
+
+<h2>Per-side freshness, fading independently</h2>
+
+<p>
+Each call row tracks two timestamps: <code>last_customer_at</code> and
+<code>last_rep_at</code>. The customer cell looks at the first one to
+decide whether to pulse; the rep cell looks at the second. They fade
+independently — if the customer is talking while the rep is silent, the
+customer cell pulses red and the rep cell sits dim, and vice versa.
+</p>
+
+<p>
+Two pieces make the fade work without flicker:
+</p>
+
+<ul>
+  <li>The backend keeps the most-recent <em>non-empty</em> text per side, so a content-less ping (the early warning we sometimes broadcast before the final text is known) won't wipe the cell back to a dash mid-call.</li>
+  <li>The frontend arms a 4.2-second timer on every fresh utterance per side. When the timer fires it bumps the age past the "fresh" threshold and re-renders, so the cell fades even if no further events arrive.</li>
+</ul>
+
+<h2>The echo bug that nearly shipped</h2>
+
+<div class="callout">
+<strong>Symptom:</strong> the customer and rep cells flashed nonstop,
+repeating text that hadn't been spoken in minutes. The dots pulsed in a
+fast alternating pattern. Audio was fine.
+</div>
+
+<p>
+The rep's browser POSTs every utterance to <code>/speaker-event</code>.
+That handler updates <code>_call_activity</code> and broadcasts a
+synthetic <code>transcribe.utterance</code> event so the monitor sees it
+in real time.
+</p>
+
+<p>
+The rep's browser also subscribes to <code>/ws/events</code> — the same
+fanout the monitor uses. When the synthetic event got broadcast, the rep
+UI saw it, classified it as a transcribe event, and POSTed it back to
+<code>/speaker-event</code>. Which broadcast it again. Which the rep UI
+received again. Infinite loop, tight enough to keep both cells
+permanently "fresh".
+</p>
+
+<p>
+The fix is one field. The synthetic broadcast stamps itself
+<code>"origin": "monitor_relay"</code>; the rep UI skips the back-POST
+when it sees that marker:
+</p>
+
+<pre><code>if (role && state.call?.id && evt.origin !== "monitor_relay") {
+  fetch(`${API_BASE}/speaker-event`, { … });
+}</code></pre>
+
+<p>
+Real relay-delivered events don't carry that field, so they still POST.
+Synthetic ones we re-fanned out are short-circuited. The lesson — when a
+broadcast bus and an HTTP write path both touch the same state, mark
+which one is the echo or you'll get one.
+</p>
+
+<h2>Recordings live with SignalWire, not us</h2>
+
+<p>
+The monitor's listen-in audio is for live calls only — once a call ends
+the WebSocket closes and the μ-law buffer drains. For historical
+playback, the SWML carries a <code>record_call</code> verb (when
+<code>SIDECAR_RECORD_CALLS=1</code>) so SignalWire records the bridged
+call into its cloud recording store. The <a href="/sidecar/cdr">CDR</a>
+detail modal retrieves it on demand via SignalWire's LaML-compat
+recordings endpoint
+(<code>GET /api/laml/2010-04-01/Accounts/{ProjectId}/Recordings.json?CallSid=…</code>)
+and plays the mp3 through a backend proxy that injects project
+basic-auth, so the browser never sees the API token.
+</p>
+
+<p>
+There <em>is</em> a native Relay equivalent
+(<code>GET /api/relay/rest/recordings</code>) and it's even what the
+agents SDK's <code>RecordingsResource</code> targets — but at the time
+of writing it has no working call-id filter. <code>?call_id=…</code>,
+<code>?CallSid=…</code>, and <code>?relay_pstn_leg_id=…</code> are all
+silently ignored: the endpoint returns the unfiltered page regardless.
+Combined with the fact that each recording carries only
+<code>relay_pstn_leg_id</code> (the PSTN-side leg) and not the SWML
+<code>call_id</code> we get from the webhook, finding "the recording
+for this call" via the relay path would mean fetching every recording
+in the project and matching client-side. LaML's <code>?CallSid=…</code>
+does it in one round trip, so that's what's wired.
+</p>
+
+<p>
+This split — live monitor for the present, CDR + recording for the
+past — keeps each surface focused. The monitor stays small (a table
+plus a μ-law decoder); the historical view inherits SignalWire's
+storage instead of duplicating it locally.
+</p>
+
+<h2>Why a CDR sits underneath all of this</h2>
+
+<p>
+Everything above is volatile — process restart and the
+<code>_call_activity</code> dict empties. The CDR (a SQLite database with
+WAL mode on) is the durable record. The monitor's "active calls" query
+is just <code>SELECT … WHERE ended_at IS NULL</code> against that table,
+with a stale-sweep that closes any row whose last update is older than
+10 minutes. If a container gets rebuilt mid-call the row will eventually
+seal itself with <code>end_reason='stale'</code> instead of haunting
+the table forever.
+</p>
+
+<h2>Where the boundaries are</h2>
+
+<p>
+A handful of opinions made this small enough to fit in one page:
+</p>
+
+<ul>
+  <li><strong>No new database.</strong> The CDR table and an in-memory activity dict are enough; nothing in the monitor needs to survive longer than the call itself, except what the CDR already captures.</li>
+  <li><strong>Browser does the resampling.</strong> Shipping μ-law over the wire (instead of decoded PCM) keeps the WS frames at 8 kbps per listener.</li>
+  <li><strong>Push for liveness, poll for truth.</strong> The push path is best-effort. The poll is authoritative. Neither has to be perfect because the other is also there.</li>
+  <li><strong>Synthesise events, don't synthesise state.</strong> When the rep's UI wants the monitor to know something, it POSTs an event that becomes a broadcast. There's no second pipe for "monitor state" — the fanout is the only message bus.</li>
+</ul>
+
+<p class="footnote">
+Files referenced: <code>brian_sidecar/sidecar_app.py</code>,
+<code>brian_sidecar/static/monitor.html</code>,
+<code>brian_sidecar/static/audio_worklet.js</code>,
+<code>brian_sidecar/static/app.js</code>,
+<code>brian_sidecar/cdr_store.py</code>.
+</p>
+
+</article>
+
+</body>
+</html>
