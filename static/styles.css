@@ -71,6 +71,20 @@ body {
   padding-bottom: 220px; /* leave room for floating action bar */
 }
 
+/* Self-hosted Material Symbols subset — only the ~55 icons this app uses,
+   pinned to the opsz24/wght400/FILL0/GRAD0 instance (~8KB). Replaces the
+   Google Fonts <link> that used display=block, which blocked every icon's
+   paint on a cold cross-origin font download (the 0.75–1.6s render times
+   Cloudflare flagged). Same-origin + preloaded + display=block here means
+   the icon paints near-instantly with no fallback-text flash. */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/material-symbols-rounded-subset-v3.woff2") format("woff2");
+}
+
 /* Material Symbols: optical sizing */
 .material-symbols-rounded {
   font-family: "Material Symbols Rounded";
@@ -360,10 +374,16 @@ body {
   font-size: 12px; color: var(--m-on-surface-2);
   cursor: pointer;
   user-select: none;
+  /* Keep the label on one line and don't let a cramped flex row (e.g. the
+     appbar next to the "Updated …" timestamp) squash it — the wrap was
+     splitting "Auto-refresh" across two lines and shrinking the track. */
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .switch input {
   appearance: none; -webkit-appearance: none;
   position: relative;
+  flex-shrink: 0;            /* hold the 34px track; never compress the oval */
   width: 34px; height: 20px;
   background: var(--m-surface-3);
   border: 1px solid var(--m-outline-strong);

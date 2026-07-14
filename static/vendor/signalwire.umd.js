@@ -14032,7 +14032,7 @@ var WebRTCVertoManager = class extends VertoManager {
 		}
 		return {
 			callID: rtcPeerConnController.id,
-			node_id: initial ? "" : this._nodeId$.value ?? "",
+			node_id: this._nodeId$.value ?? "",
 			subscribe
 		};
 	}

@@ -93,36 +93,110 @@ const state = {
 const setLed = (el, kind) => { el.classList.remove("on", "warn", "bad"); if (kind) el.classList.add(kind); };
 const setState = (text) => { els.state.textContent = text; };
 
-// One-shot self-heal: if the SDK reports the symptomatic relay-wedge timeout
-// (RPCTimeoutError during init/register, or CallCreateError during dial), DELETE
-// the subscriber on the SignalWire side and reload. The next /token mint
-// recreates a fresh subscriber identity which clears the wedge.
-// Guarded by a flag so a real outage doesn't reload-loop.
-let _selfHealedThisSession = false;
-async function maybeSelfHeal(err) {
-  if (_selfHealedThisSession) return false;
+// Self-heal: the relay sometimes holds a stale registration for our
+// subscriber (common after a host reboot or long idle), so the first
+// dial/register times out with RPCTimeoutError / CallCreateError. When that
+// signature shows up we recover transparently — tear down the wedged client,
+// DELETE the subscriber so the next /token mints a fresh identity, reconnect,
+// and REPLAY whatever the user was doing (the dial with its destination, or
+// go-online). No page reload, no lost intent.
+//
+// `_pendingIntent` records the in-flight action so it can be replayed.
+// Bounded by `_HEAL_MAX` so a genuine outage can't loop forever; the counter
+// resets once a call actually connects (see attachCall) or registration
+// succeeds (see _bindRegistrationState).
+let _healing = false;
+let _healAttempts = 0;
+const _HEAL_MAX = 2;
+let _pendingIntent = null;   // {kind:'dial', destination} | {kind:'online'} | null
+
+function _isWedge(err) {
   const msg = String((err && err.message) || err || "");
   const name = (err && err.name) || "";
-  const wedged =
-    name === "RPCTimeoutError" ||
-    name === "CallCreateError" ||
-    /RPC request .* timed out/i.test(msg) ||
-    /Call create timeout/i.test(msg);
-  if (!wedged) return false;
-  _selfHealedThisSession = true;
-  setState("session stuck — resetting subscriber…");
+  return name === "RPCTimeoutError"
+      || name === "CallCreateError"
+      || /RPC request .* timed out/i.test(msg)
+      || /Call create timeout/i.test(msg);
+}
+
+async function maybeSelfHeal(err) {
+  if (_healing) return true;            // a heal is already running
+  if (!_isWedge(err)) return false;     // not the wedge signature — caller handles it
+  // A live, attached call means the SESSION is healthy — it is not wedged.
+  // The SDK auto-fires call.layout.list on call.joined, which on an
+  // audio-only fabric call returns -32602 / times out (RPCTimeoutError).
+  // That benign per-call error must NOT trigger the destroy-and-reconnect
+  // recovery: doing so kills the connected call and orphans the PSTN leg.
+  // Self-heal exists only to recover a session stuck before a call (can't
+  // dial / can't go online), so suppress it whenever a call is up.
+  if (state.call) {
+    console.warn("[sidecar] ignoring wedge-signature error during active call:",
+                 (err && (err.message || err.name)) || err);
+    return true;
+  }
+  if (_healAttempts >= _HEAL_MAX) {
+    setState("session stuck — reload the page to recover");
+    setLed(els.ledToken, "bad");
+    return true;
+  }
+  _healing = true;
+  _healAttempts += 1;
+  setState("connection stuck — recovering…");
   setLed(els.ledToken, "warn");
   try {
-    const r = await fetch(`${API_BASE}/subscriber`, {
-      method: "DELETE",
-      credentials: "include",
-    });
-    if (!r.ok) console.warn("[sidecar] reset HTTP", r.status);
+    // INBOUND-SAFE GATE. The delete-and-recreate recovery is correct for an
+    // OUTBOUND dial wedge (fresh identity clears a half-provisioned subscriber).
+    // But when the rep is registered for inbound (online), or an inbound call
+    // is in flight, the subscriber identity MUST be preserved — deleting it
+    // drops the registration the DID's SWML bridges to (/private/<subscriber>)
+    // and kills the very call we're answering. In that case we reconnect and
+    // re-register WITHOUT deleting the subscriber.
+    const inboundContext = state.online || !!state.pendingCall
+                           || (_pendingIntent && _pendingIntent.kind === "online");
+    // 1. Drop the wedged client so the fresh token gets a clean one.
+    try { state.client?.disconnect?.(); } catch {}
+    state.client = null;
+    state.online = false;
+    state.pendingCall = null;
+    if (els.invite) els.invite.hidden = true;
+    setLed(els.ledCall, "");
+    if (!inboundContext) {
+      // 2. OUTBOUND ONLY: evict the wedged subscriber so the next /token mints
+      //    a fresh identity.
+      try {
+        await fetch(`${API_BASE}/subscriber`, { method: "DELETE", credentials: "include" });
+      } catch (e) { console.warn("[sidecar] subscriber reset failed:", e); }
+      // 3. Let the relay settle the deletion before re-minting.
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    // 4. Reconnect: fresh /token + new SDK client (connect() re-wires the
+    //    error/registration/incoming subscriptions on the new client).
+    await connect();
+    if (!state.client) throw new Error("reconnect produced no client");
+    // 5. Replay. Inbound context → go back online so the rep is ready for the
+    //    next inbound call (the wedged call itself is gone). Outbound → replay
+    //    the dial that wedged.
+    const intent = _pendingIntent;
+    if (inboundContext) {
+      setState("reconnected — going back online…");
+      await toggleOnline();
+    } else if (intent && intent.kind === "dial") {
+      setState("reconnected — retrying dial…");
+      els.destInput.value = intent.destination;
+      await dial();
+    } else if (intent && intent.kind === "online") {
+      setState("reconnected — going online…");
+      await toggleOnline();
+    } else {
+      setState("reconnected — ready to dial");
+    }
   } catch (e) {
-    console.warn("[sidecar] reset failed:", e);
+    console.warn("[sidecar] self-heal failed:", e);
+    setState("recovery failed — reload the page");
+    setLed(els.ledToken, "bad");
+  } finally {
+    _healing = false;
   }
-  setState("reset done — reloading…");
-  setTimeout(() => location.reload(), 600);
   return true;
 }
 
@@ -237,6 +311,7 @@ async function connect() {
 function _bindRegistrationState(client) {
   client.isRegistered$.subscribe((reg) => {
     state.online = !!reg;
+    if (reg) { _healAttempts = 0; }   // registered → healthy again
     els.btnOnline.textContent = reg ? "Go Offline" : "Go Online";
     els.btnOnline.classList.toggle("online-active", !!reg);
     // Don't stomp an active call's status line; only narrate idle state.
@@ -256,22 +331,26 @@ async function toggleOnline() {
   const errSub = state.client.errors$.subscribe((e) => { rpcErr = e; });
   try {
     if (goingOnline) {
+      // Record the intent so a wedge can be replayed by the self-heal.
+      _pendingIntent = { kind: "online" };
       setState("going online…");
       await state.client.register();   // resolves even on failure
       // Give isRegistered$ a tick to settle, then trust IT, not register().
       await new Promise((r) => setTimeout(r, 200));
       if (!state.client.isRegistered) {
-        // Genuine rejection. If it's the known relay-wedge timeout the
-        // error subscription's self-heal is already reloading; otherwise
-        // surface the real reason and stay visibly offline.
+        // Genuine rejection. If it's the known relay-wedge timeout, recover
+        // + replay the go-online transparently; otherwise surface the reason.
         if (rpcErr && (await maybeSelfHeal(rpcErr))) return;
+        _pendingIntent = null;
         throw new Error(
           rpcErr ? (rpcErr.message || rpcErr.name || String(rpcErr))
                  : "relay rejected subscriber.online"
         );
       }
+      _pendingIntent = null;   // registered — nothing to replay
       // Success path — the isRegistered$ subscription updates the button.
     } else {
+      _pendingIntent = null;   // going offline; nothing to replay
       await state.client.unregister();   // this one DOES throw on failure
     }
   } catch (e) {
@@ -302,7 +381,18 @@ async function acceptInvite() {
   setLed(els.ledCall, "warn");
   setState("answering…");
   try {
-    await call.answer();
+    // Pass media options (mirrors the outbound dial). Without them the SDK
+    // answers with no audio media → the SDP answer never completes and the
+    // relay leg stays unanswered (created → cancel), so the caller never
+    // bridges even though the rep "answered".
+    state.callDirection = "inbound";
+    await call.answer({ audio: true, video: false });
+    // Track the answered call exactly like an outbound dial: this wires
+    // remoteStream$ → the audio element (so the rep HEARS the caller),
+    // status/destroy handlers, and resets the heal counter. Without it the
+    // inbound call is live on the wire but untracked — no audio, and a
+    // benign per-call RPC error could trip the self-heal into killing it.
+    attachCall(call);
   } catch (e) {
     setLed(els.ledCall, "bad");
     setState(`answer failed: ${e.message}`);
@@ -326,10 +416,21 @@ async function dial() {
   const destination = els.destInput.value.trim();
   if (!to) { setState("enter a dial address first"); return; }
   if (!destination) { setState("enter a destination number"); return; }
+  // Validate E.164 HERE, not in the SWML cond. The relay's expression engine
+  // returns "Empty result" on a regex `when` (/.../.test(...)), so the server
+  // branches only on PRESENCE of destination_number — it trusts the browser to
+  // send a well-formed number. Reject anything that isn't +<7–15 digits>.
+  if (!/^\+[1-9]\d{6,14}$/.test(destination)) {
+    setState("destination must be E.164, e.g. +14155551234");
+    return;
+  }
   // A dial starts a fresh call — drop the post-call banner if it's still
   // up AND kill any pending banner-reveal timer from the previous call's
   // teardown so it doesn't pop up mid-ringing.
   _cancelPostCallBanner();
+  // Record the intent so a wedge mid-dial can be replayed by the self-heal.
+  _pendingIntent = { kind: "dial", destination };
+  state.callDirection = "outbound";
   els.btnDial.disabled = true;
   setLed(els.ledCall, "warn");
   setState(`dialing ${to} → ${destination}…`);
@@ -343,9 +444,11 @@ async function dial() {
       userVariables: { destination_number: destination },
     });
     attachCall(call);
+    _pendingIntent = null;          // connected — nothing to replay
   } catch (e) {
     setLed(els.ledCall, "bad");
-    if (await maybeSelfHeal(e)) return;
+    if (await maybeSelfHeal(e)) return;   // wedge → recover + replay this dial
+    _pendingIntent = null;
     setState(`dial failed: ${e.message}`);
     els.btnDial.disabled = false;
   }
@@ -356,6 +459,8 @@ function attachCall(call) {
   state.pendingCall = null;
   state.muted = false;
   _callEndedFired = false;
+  _healAttempts = 0;          // a call connected → we're healthy again
+  _pendingIntent = null;
   // Belt-and-suspenders: if any prior teardown scheduled the banner
   // reveal and it hasn't fired yet, kill it — we have a real new call
   // attaching now.
@@ -385,6 +490,7 @@ function attachCall(call) {
     setState(`call ${status}`);
     if (LIVE_STATES.has(status)) everLive = true;
     if (status === "connected" || status === "active") {
+      _callLive = true;
       setLed(els.ledCall, "on");
       // Coach orb is hidden until we're actually on a live call. It hides
       // again automatically when an insight arrives (pushInsight) and on
@@ -394,6 +500,7 @@ function attachCall(call) {
       }
     }
     if (TERMINAL_STATES.has(status) && everLive) {
+      _callLive = false;
       _onCallEnded();
     }
   });
@@ -427,6 +534,13 @@ function _cancelPostCallBanner() {
   if (els.postCall) els.postCall.hidden = true;
 }
 
+// True between the call reaching connected/active and a real terminal state.
+// The inbound ai_sidecar emits a `final` event at BRIDGE time (transcribe_close
+// fires the instant `connect` answers), which must NOT be treated as the call
+// ending — the bridged conversation is just starting. While _callLive is true
+// the SDK call lifecycle (status$ terminal / "destroy") is the sole authority
+// for teardown; the ai_sidecar `final` only paints its summary bubble.
+let _callLive = false;
 let _callEndedFired = false;
 function _onCallEnded() {
   // UI flush — always safe to re-run; the chip / button / led writes
@@ -448,6 +562,7 @@ function _onCallEnded() {
 }
 
 function teardownCall() {
+  _callLive = false;
   state.callSubs.forEach((s) => s?.unsubscribe?.());
   state.callSubs = [];
   state.call = null;
@@ -784,14 +899,18 @@ function routeToDashboard(t, evt, ts) {
   else if (t === "transcribe.utterance" || t === "utterance") {
     const u = evt.utterance || {};
     const role = (u.role || "").toLowerCase();
-    // SignalWire labels the two call legs "remote-caller" and
-    // "local-caller". The sidecar's customer_role config decides which
-    // leg is the customer; whatever's not that role is the rep. The
-    // authoritative value comes from /token (state.customerRole). The
-    // fallback below matches the backend default — in this app's call
-    // shape the rep dials in (remote-caller) and the customer is the
-    // connect-out leg (local-caller).
-    const customerRole = (state.customerRole || "local-caller").toLowerCase();
+    // SignalWire labels the two legs relative to the leg that ran the SWML
+    // (the A-leg): that leg is "local-caller", the connected-out leg is
+    // "remote-caller". The configured customer_role (from /token) describes
+    // the OUTBOUND shape — rep dials in (A-leg = local-caller), customer is
+    // the connect-out leg (remote-caller) → customer = "remote-caller".
+    // INBOUND flips it: the PSTN customer IS the A-leg (local-caller) and the
+    // rep is the connect-out (remote-caller). So on inbound we invert the
+    // configured role; otherwise the bubbles come out swapped.
+    const cfgCustomer = (state.customerRole || "remote-caller").toLowerCase();
+    const customerRole = state.callDirection === "inbound"
+      ? (cfgCustomer === "remote-caller" ? "local-caller" : "remote-caller")
+      : cfgCustomer;
     const kind = role === customerRole ? "customer" : "rep";
     if (u.content) pushBubble(kind, u.content, ts);
     // Side-channel the utterance to the backend so the monitor page can
@@ -826,6 +945,21 @@ function routeToDashboard(t, evt, ts) {
     // SDK. _onCallEnded is idempotent (guarded by _callEndedFired), so if
     // status$ DID already fire this is a no-op; if it didn't, this is what
     // unsticks the page. Single active call at a time, so no id match needed.
+    //
+    // BUT: on inbound the ai_sidecar emits `final` at bridge time
+    // (transcribe_close), long before the call actually ends. Only honor it
+    // as a teardown when no call is live — i.e. it's a genuine end-of-call
+    // (e.g. a remote hangup where status$ didn't deliver a terminal tick).
+    // When a call IS live, the SDK terminal/destroy handlers own teardown.
+    if (state.call && !_callLive) _onCallEnded();
+  }
+  // Authoritative end-of-call from the relay (connect-status `ended`, pushed
+  // by the server). Unlike the ai_sidecar `final` (which fires early, at
+  // bridge time on inbound), this fires only when the bridged leg actually
+  // ends — so force teardown regardless of _callLive. Fixes the pill staying
+  // on "call connected" after a hangup the SDK didn't surface a terminal for.
+  else if (t === "call_ended") {
+    _callLive = false;
     if (state.call) _onCallEnded();
   }
   else if (t === "start")       resetDashboard();

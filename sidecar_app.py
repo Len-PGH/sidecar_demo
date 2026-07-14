@@ -1166,11 +1166,18 @@ class SidecarSalesCopilot(AgentBase):
             url = rec.get("media_url") or (
                 f"{self._signalwire.base}/api/relay/rest/recordings/{sid}.{fmt}")
 
-            # Cache path on disk. /data is the same persistent volume as
-            # the SQLite CDR; auto-evict policy can be added later if it
-            # grows. Filename carries the format so WAV/MP3 don't collide.
+            # Cache path on disk. Co-located with the SQLite CDR so a single
+            # CDR_DB_PATH (or the Docker /data volume) controls where all
+            # persistent state lives; SIDECAR_RECORDINGS_DIR can override.
+            # This keeps bare-metal venv installs (no /data) working — the
+            # dir follows the DB into a writable location. Auto-evict policy
+            # can be added later if it grows. Filename carries the format so
+            # WAV/MP3 don't collide.
             from pathlib import Path as _P
-            cache_dir = _P("/data/recordings")
+            cache_dir = _P(
+                os.environ.get("SIDECAR_RECORDINGS_DIR")
+                or (_P(cdr_store.DB_PATH).parent / "recordings")
+            )
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_path = cache_dir / f"{sid}.{fmt}"
 
@@ -1322,15 +1329,28 @@ class SidecarSalesCopilot(AgentBase):
             params = body.get("params") if isinstance(body, dict) else None
             p = params if isinstance(params, dict) else (body if isinstance(body, dict) else {})
             # Field names vary by relay event shape; pull the useful ones.
+            conn_state = p.get("call_state") or p.get("state") or p.get("connect_state")
+            reason = p.get("reason") or p.get("end_reason") or p.get("hangup_reason")
             self.log.info(
                 "connect_status",
                 tag=tag,
-                state=p.get("call_state") or p.get("state") or p.get("connect_state"),
+                state=conn_state,
                 to=p.get("to") or (p.get("peer") or {}).get("to") if isinstance(p.get("peer"), dict) else p.get("to"),
-                reason=p.get("reason") or p.get("end_reason") or p.get("hangup_reason"),
+                reason=reason,
                 call_id=p.get("call_id"),
                 raw=str(body)[:500],
             )
+            # Authoritative end-of-call signal for the browser. The bridged
+            # leg's `ended` state is the only RELIABLE "the call is over" event
+            # we get — the ai_sidecar `final` fires early (at bridge time, esp.
+            # on inbound) and the WebRTC SDK's status$ doesn't always deliver a
+            # terminal tick on a remote hangup, leaving the UI pill stuck on
+            # "connected". Re-broadcast it so the browser can tear down for real.
+            if conn_state == "ended":
+                self._broadcast_event(
+                    {"call_id": p.get("call_id"), "tag": tag},
+                    {"type": "call_ended", "reason": reason, "tag": tag},
+                )
             return JSONResponse({"ok": True})
 
         @router.post("/recording-status")
@@ -1831,10 +1851,17 @@ class SidecarSalesCopilot(AgentBase):
         # E.164: leading '+', 7–15 digits total. The regex is evaluated by
         # SignalWire's SWML expression engine (JavaScript-like).
         fallback_to = self.to_number or self.DEFAULT_FALLBACK_TO
-        valid_e164_check = (
-            "vars.userVariables && "
-            "vars.userVariables.destination_number && "
-            "/^\\+[1-9]\\d{6,14}$/.test(vars.userVariables.destination_number)"
+        # Branch on PRESENCE of a destination_number, NOT its format. The SWML
+        # expression engine returns `relay_script_js_eval_error: Empty result`
+        # when a `when` evaluates a regex literal (/.../.test(...)) — which only
+        # surfaces on OUTBOUND (the regex is short-circuited on inbound, where
+        # vars.userVariables is undefined), so it silently broke outbound dial.
+        # E.164 format is now validated browser-side before dialing, so any leg
+        # that reaches here with a truthy destination_number is a real outbound
+        # dial. !!(...) coerces the inbound `undefined` → false so the ladder
+        # cleanly falls through to the inbound else branch.
+        has_destination_check = (
+            "!!(vars.userVariables && vars.userVariables.destination_number)"
         )
         # Direction routing, expressed as a cond ladder:
         #
@@ -1882,10 +1909,18 @@ class SidecarSalesCopilot(AgentBase):
         # unanswerable from logs. `tag` labels which branch fired.
         cs_url = self._webhook_url("/connect-status")
 
-        def _connect(to, *, from_=None, tag=""):
-            c = {"to": to, "answer_on_bridge": True,
+        def _connect(to, *, from_=None, tag="", answer_on_bridge=True):
+            c = {"to": to,
                  "call_state_url": cs_url,
                  "call_state_events": ["created", "ringing", "answered", "ended"]}
+            # answer_on_bridge:true matches the OUTBOUND shape and is what keeps
+            # ai_sidecar transcribing across the bridge. (It was briefly set
+            # False for inbound when the bridge wasn't completing — but that was
+            # the vendored-SDK node_id bug in verto.answer, since fixed; without
+            # answer_on_bridge the inbound leg's media path tears the sidecar
+            # down at bridge time, so the live conversation never transcribes.)
+            if answer_on_bridge:
+                c["answer_on_bridge"] = True
             if from_:
                 c["from"] = from_
             if tag:
@@ -1897,24 +1932,21 @@ class SidecarSalesCopilot(AgentBase):
         main_section.append({
             "cond": [
                 {
-                    "when": valid_e164_check,
+                    # OUTBOUND (browser-initiated): a truthy destination_number
+                    # in userVariables. The browser validates E.164 before
+                    # dialing, so no separate "invalid-format → fallback" branch
+                    # is needed (and a regex `when` to detect it is what broke
+                    # the cond engine — see has_destination_check above).
+                    "when": has_destination_check,
                     "then": [_connect("%{vars.userVariables.destination_number}",
                                       from_=self.from_number, tag="outbound")],
                 },
                 {
-                    # Browser call but dest not a valid E.164. The `when`
-                    # MUST evaluate to a boolean — the cond engine ignores a
-                    # bare object reference (vars.userVariables alone matched
-                    # nothing and fell through to else→inbound). The `!= null`
-                    # comparison yields a real boolean. Guarded by the &&
-                    # so an inbound call (no userVariables) short-circuits to
-                    # undefined and correctly skips to the else branch.
-                    "when": "vars.userVariables && vars.userVariables.destination_number != null",
-                    "then": [_connect(fallback_to, from_=self.from_number, tag="fallback")],
-                },
-                {
                     # genuine inbound — ring subscriber if configured, else fallback number
                     "else": [
+                        # Match the OUTBOUND connect shape (answer_on_bridge:true)
+                        # so the ai_sidecar survives the bridge and transcribes
+                        # the live inbound conversation, the same way outbound does.
                         _connect(self.inbound_to, tag="inbound")
                         if self.inbound_to
                         else _connect(fallback_to, from_=self.from_number, tag="inbound-fallback")
