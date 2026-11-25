@@ -3,10 +3,19 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # curl is needed for the HEALTHCHECK; everything else is pure-Python.
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# Installing a package does not refresh what the base image already
+# satisfies, so base security updates need an explicit upgrade. This
+# fixes the image at BUILD time -- it is only as fresh as its last rebuild.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
+# The python image's own build tooling is separately stale: `wheel` and
+# setuptools' vendored `jaraco.context` each carry a HIGH with a published
+# fix. Build-time tools rather than runtime imports, but free to update.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY sidecar_app.py signalwire_rest.py sample_data.py cdr_store.py live_data.py ./
