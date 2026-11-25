@@ -1,2 +1,2 @@
-signalwire-sdk==3.0.2
+signalwire-sdk>=3.7.4
 python-dotenv>=1.0.0
